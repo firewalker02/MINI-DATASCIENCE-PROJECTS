@@ -1,0 +1,271 @@
+# NAME: URSANNE KENGNE 
+# STUDENT ID: 218591560
+# FINAL PROJECT DELIVERABLE
+
+
+# import necessary packages such as pacman
+
+if(!require("pacman")) install.packages("pacman")
+
+# load require libraries such as JPEG and datasets
+
+library(jpeg)
+library(datasets)
+
+#
+
+
+
+# final_project_solution.R
+# --------------------------------------------
+# PROJECT: Classification of Columbia Campus Images
+# METHOD: Partition images into a 10x10 grid, compute median intensities,
+#         then classify images (indoor vs. outdoor) using logistic regression
+#         and a neural network.
+#
+# --------------------------------------------
+
+#library(reticulate)
+#install_tensorflow()
+
+# Load necessary libraries. Install if not present.
+if (!require("jpeg")) install.packages("jpeg", repos="http://cran.us.r-project.org")
+if (!require("keras")) install.packages("keras", repos="http://cran.us.r-project.org")
+if (!require("tidyverse")) install.packages("tidyverse", repos="http://cran.us.r-project.org")
+if (!require("pROC")) install.packages("pROC", repos="http://cran.us.r-project.org")
+#if(!require("tensorflow")) install.packages("tensorflow", repos="http://cran.us.r-project.org")
+
+library(jpeg)       # For reading JPEG images.
+library(keras)      # For building the neural network.
+library(tidyverse)  # For data manipulation.
+library(pROC)       # For ROC analysis.
+#library(tensorflow)
+#library(reticulate)
+#install_tensorflow()
+
+
+
+# --------------------------------------------
+# PART 1: DATA PREPARATION
+# --------------------------------------------
+
+# Read meta-data CSV to get file names and categories.
+# Assumes photoMetaData.csv has at least columns: name and category.
+pm <- read.csv("photoMetaData.csv")
+# For this experiment, we define the binary response:
+# 1 for "outdoor-day" (or any outdoor category) and 0 for indoor.
+# (Change conditions as required by your experiment.)
+y <- as.numeric(pm$category == "outdoor-day")
+
+# Function to partition an image into a 10x10 grid and compute median intensity.
+# For a color image, we first compute the median for each color channel and then average across channels.
+extract_features <- function(image_path) {
+  # Read the JPEG image.
+  img <- tryCatch(readJPEG(image_path), error = function(e) { 
+    message(sprintf("Error reading file: %s", image_path))
+    return(NULL)
+  })
+  if (is.null(img)) return(rep(NA, 100))  # Return 100 NA's if error.
+  
+  # Convert image to matrix if needed.
+  # If the image is color, it will be an array of dimensions (height, width, 3).
+  dims <- dim(img)
+  if (length(dims) != 3) {
+    # If image is grayscale, replicate it across 3 channels.
+    img <- array(rep(img, 3), dim = c(dims[1], dims[2], 3))
+  }
+  
+  # Determine grid cell size.
+  grid_rows <- 10
+  grid_cols <- 10
+  height <- dims[1]
+  width  <- dims[2]
+  cell_height <- floor(height / grid_rows)
+  cell_width  <- floor(width / grid_cols)
+  
+  features <- numeric()
+  
+  # For each grid cell, compute the median intensity across channels.
+  for (i in 0:(grid_rows-1)) {
+    for (j in 0:(grid_cols-1)) {
+      # Determine cell boundaries.
+      row_start <- i * cell_height + 1
+      row_end   <- (i+1) * cell_height
+      col_start <- j * cell_width + 1
+      col_end   <- (j+1) * cell_width
+      
+      cell <- img[row_start:row_end, col_start:col_end, ]
+      # Compute median for each channel.
+      medians <- apply(cell, 3, median)
+      # Average over channels to get one number for the cell.
+      cell_feature <- mean(medians)
+      features <- c(features, cell_feature)
+    }
+  }
+  return(features)
+}
+
+# Build a feature matrix X for all images.
+n <- nrow(pm)
+X <- matrix(NA, ncol = 100, nrow = n)
+for (j in 1:n) {
+  # Construct the full image path. Ensure a path separator is present.
+  img_path <- file.path("columbiaImages", pm$name[j])
+  features <- extract_features(img_path)
+  X[j, ] <- features
+  if (j %% 10 == 0) cat(sprintf("%03d / %03d images processed\n", j, n))
+}
+
+# Remove rows with NA if any.
+valid_indices <- complete.cases(X)
+X <- X[valid_indices, ]
+y <- y[valid_indices]
+pm <- pm[valid_indices, ]
+
+# Normalize predictors (for neural network and logistic regression).
+X <- scale(X)
+
+# Partition data into training and testing sets. 
+# Train 70% and reserve 30% for testing
+
+set.seed(123)
+train_idx <- sample(1:nrow(X), size = floor(0.7 * nrow(X)))
+X_train <- X[train_idx, ]
+X_test <- X[-train_idx, ]
+y_train <- y[train_idx]
+y_test <- y[-train_idx]
+
+# --------------------------------------------
+# PART 2: LOGISTIC REGRESSION CLASSIFICATION (BASELINE)
+# --------------------------------------------
+logistic_model <- glm(y_train ~ ., data = as.data.frame(X_train), family = binomial)
+summary(logistic_model)
+
+# Predict on test set.
+pred_prob_logistic <- predict(logistic_model, as.data.frame(X_test), type = "response")
+pred_class_logistic <- ifelse(pred_prob_logistic > 0.5, 1, 0)
+
+# Evaluation metrics.
+logistic_accuracy <- mean(pred_class_logistic == y_test) * 100  # accuracy in percentage
+conf_matrix_logistic <- table(Predicted = pred_class_logistic, Actual = y_test)
+print("Logistic Regression Confusion Matrix:")
+print(conf_matrix_logistic)
+
+# Calculate sensitivity and specificity.
+TP <- conf_matrix_logistic["1", "1"]
+TN <- conf_matrix_logistic["0", "0"]
+FP <- conf_matrix_logistic["1", "0"]
+FN <- conf_matrix_logistic["0", "1"]
+
+sensitivity_logistic <- TP / (TP + FN)
+specificity_logistic <- TN / (TN + FP)
+
+cat(sprintf("Logistic Regression Accuracy: %.2f%%\n", logistic_accuracy))
+cat(sprintf("Sensitivity: %.2f%%  Specificity: %.2f%%\n", sensitivity_logistic*100, specificity_logistic*100))
+
+# --------------------------------------------
+# PART 3: NEURAL NETWORK CLASSIFICATION USING KERAS
+# --------------------------------------------
+library(keras)
+
+# Ensure X_train is a matrix and convert input_shape to a vector.
+X_train <- as.matrix(X_train)
+
+model_nn <- keras_model_sequential()
+model_nn$add(layer_dense(units = 128, activation = "relu", input_shape = c(ncol(X_train))))
+model_nn$add(layer_dropout(rate = 0.3))
+model_nn$add(layer_dense(units = 64, activation = "relu"))
+model_nn$add(layer_dropout(rate = 0.3))
+model_nn$add(layer_dense(units = 1, activation = "sigmoid"))
+
+# Explicitly build the model with an input shape.
+#model_nn$add (build(input_shape = c(NULL, ncol(X_train))))
+
+model_nn$compile(
+  loss = "binary_crossentropy",
+  optimizer = optimizer_adam(learning_rate = 0.001),
+  metrics = list("accuracy")
+)
+
+
+X_train <- as.matrix(X_train)
+y_train <- as.numeric(y_train)
+
+#X_train_tensor <- tf$convert_to_tensor(X_train, dtype = tf$float64)
+#y_train_tensor <- tf$convert_to_tensor(y_train, dtype = tf$float64)
+
+X_array <- as.array(X_train)
+y_array <- as.array(y_train)
+
+# Train the neural network.
+history <- model_nn$fit(
+  
+  x = X_train,
+  y = y_train,
+  epochs = 50,
+  batch_size = 32,
+  validation_split = 0.2,
+  #verbose = 2
+)
+
+
+# Plot training history.
+plot(history)
+
+# Evaluate on test set.
+score <- model_nn %>% evaluate(X_test, y_test, verbose = 0)
+nn_accuracy <- score$accuracy * 100
+cat(sprintf("Neural Network Test Accuracy: %.2f%%\n", nn_accuracy))
+
+# Generate predictions and confusion matrix.
+pred_prob_nn <- model_nn %>% predict(X_test)
+pred_class_nn <- ifelse(pred_prob_nn > 0.5, 1, 0)
+conf_matrix_nn <- table(Predicted = pred_class_nn, Actual = y_test)
+print("Neural Network Confusion Matrix:")
+print(conf_matrix_nn)
+
+# Compute sensitivity and specificity for the neural network.
+TP_nn <- conf_matrix_nn["1", "1"]
+TN_nn <- conf_matrix_nn["0", "0"]
+FP_nn <- conf_matrix_nn["1", "0"]
+FN_nn <- conf_matrix_nn["0", "1"]
+
+sensitivity_nn <- TP_nn / (TP_nn + FN_nn)
+specificity_nn <- TN_nn / (TN_nn + FP_nn)
+cat(sprintf("Neural Network Sensitivity: %.2f%%  Specificity: %.2f%%\n", sensitivity_nn*100, specificity_nn*100))
+
+# --------------------------------------------
+# PART 4: COMPARISON AND REPORTING
+# --------------------------------------------
+
+# For ROC curves.
+library(pROC)
+roc_logistic <- roc(y_test, pred_prob_logistic)
+roc_nn <- roc(y_test, as.vector(pred_prob_nn))
+plot(roc_logistic, col = "blue", main = "ROC Comparison", print.auc = TRUE)
+lines(roc_nn, col = "red")
+legend("bottomright", legend = c("Logistic Regression", "Neural Network"), col = c("blue", "red"), lwd = 2)
+
+# Save final results into a list.
+final_results <- list(
+  logistic = list(
+    accuracy = logistic_accuracy,
+    sensitivity = sensitivity_logistic * 100,
+    specificity = specificity_logistic * 100,
+    confusion_matrix = conf_matrix_logistic,
+    auc = auc(roc_logistic)
+  ),
+  neural_network = list(
+    accuracy = nn_accuracy,
+    sensitivity = sensitivity_nn * 100,
+    specificity = specificity_nn * 100,
+    confusion_matrix = conf_matrix_nn,
+    auc = auc(roc_nn)
+  )
+)
+
+print("Final Results:")
+print(final_results)
+
+# Optionally, save final_results and other outputs to a file for inclusion in a LaTeX report.
+save(final_results, file = "final_results_s.RData")

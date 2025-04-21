@@ -1,0 +1,87 @@
+# Import and load necessary packages
+
+if(!require("pacman")) install.packages("pacman")
+if(!require("randomForest")) install.packages("randomForest")
+
+require(datasets)
+
+pacman:: p_load(rio, tidyverse)
+
+# Load required libraries
+library(e1071)         # For SVM
+library(randomForest)  # For Random Forest
+
+
+# Step 1: Import and Read the Data
+
+# The German Credit Data Set is assumed to be in the file "german.data".
+# Adjust the read.table parameters as needed (e.g., separator, header, etc.).
+# Here we assume the file has no header and is whitespace delimited.
+data <- read.table("german.data-numeric", header = FALSE)
+
+# For this example, we assume that the response variable (default status) is in the last column.
+# Convert it to a factor.
+response_col <- ncol(data)
+data[, response_col] <- as.factor(data[, response_col])
+
+head(data)
+
+# Step 2: Set up Cross-Validation
+
+# We will perform 1000 iterations of randomly splitting the data into a training set (800 obs) and a test set (200 obs),
+# then fitting both SVM and Random Forest models to predict the default status.
+
+niter <- 1000
+svm_errors <- numeric(niter)
+rf_errors <- numeric(niter)
+
+set.seed(123)  # For reproducibility
+
+for (i in 1:niter) {
+  # Randomly sample 800 observations for training
+  train_idx <- sample(1:nrow(data), 800)
+  train_data <- data[train_idx, ]
+  test_data  <- data[-train_idx, ]
+  
+  
+  # Step 3: Fit the SVM Model
+
+  # We use a radial kernel (default for many SVM implementations)
+  svm_model <- svm(as.formula(paste("V", response_col, "~ .", sep="")), data = train_data, kernel = "radial")
+  
+  # Predict on the test set
+  svm_pred <- predict(svm_model, test_data)
+  
+  # Calculate misclassification error: fraction of test observations misclassified
+  svm_errors[i] <- mean(svm_pred != test_data[, response_col])
+  
+  
+  # Step 4: Fit the Random Forest Model
+  
+  rf_model <- randomForest(as.formula(paste("V", response_col, "~ .", sep="")), data = train_data)
+  
+  # Predict on the test set
+  rf_pred <- predict(rf_model, test_data)
+  
+  # Calculate misclassification error
+  rf_errors[i] <- mean(rf_pred != test_data[, response_col])
+}
+
+svm_errors
+
+avg_svm_error <- mean(svm_errors)
+avg_rf_error  <- mean(rf_errors)
+
+cat("Average Misclassification Error (SVM):", avg_svm_error, "\n")
+cat("Average Misclassification Error (Random Forest):", avg_rf_error, "\n")
+
+# --------------------------
+# Explanation:
+# --------------------------
+# The misclassification error is defined as the proportion of test set observations where the predicted default status does not match the actual default status.
+# In the above code, for each iteration we compute the error rate for both models and then average these error rates over 1000 iterations.
+#
+# Based on the average errors computed, you can compare the two models. In many cases, Random Forest tends to be more robust,
+# especially when there is variability in the dataset, and it may produce a lower misclassification error than SVM.
+#
+# Finally, the printed average misclassification errors will show which model performs better on this dataset.

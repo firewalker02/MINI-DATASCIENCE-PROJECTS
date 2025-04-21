@@ -1,0 +1,499 @@
+> # PROJECT: Classification of Columbia Campus Images Using Grid Partitioning
+> #
+> # OBJECTIVE:
+> #  - Partition each JPEG image into a 10x10 grid.
+> #  - For each grid cell, compute the median pixel intensity (averaged over color channels).
+> #    This results in 100 predictors for each image.
+> #  - Build two models:
+> #       (1) A logistic regression classifier.
+> #       (2) A neural network classifier using the neuralnet package.
+> #  - Evaluate the methods using overall accuracy, sensitivity, specificity, and ROC/AUC.
+> #
+> # REFERENCES:
+> #  - ADVENT Technical Report #205-2004-5 (Ng et al., Feb 2005)
+> #  - Additional scene classification literature (e.g., MIT Places dataset)
+> #
+> # AUTHOR: [Your Name]
+> # DATE: [Today's Date]
+> # ------------------------------------------------------------
+> 
+> # -------------------------------
+> # Part 0: Load Libraries
+> # -------------------------------
+> if (!require("jpeg")) install.packages("jpeg", repos="http://cran.us.r-project.org")
+Loading required package: jpeg
+> if (!require("tidyverse")) install.packages("tidyverse", repos="http://cran.us.r-project.org")
+Loading required package: tidyverse
+── Attaching core tidyverse packages ───────────────────────────────────────────────────────── tidyverse 2.0.0 ──
+✔ dplyr     1.1.4     ✔ readr     2.1.5
+✔ forcats   1.0.0     ✔ stringr   1.5.1
+✔ ggplot2   3.5.1     ✔ tibble    3.2.1
+✔ lubridate 1.9.4     ✔ tidyr     1.3.1
+✔ purrr     1.0.4     
+── Conflicts ─────────────────────────────────────────────────────────────────────────── tidyverse_conflicts() ──
+✖ dplyr::filter() masks stats::filter()
+✖ dplyr::lag()    masks stats::lag()
+ℹ Use the conflicted package to force all conflicts to become errors
+> if (!require("neuralnet")) install.packages("neuralnet", repos="http://cran.us.r-project.org")
+Loading required package: neuralnet
+
+Attaching package: ‘neuralnet’
+
+The following object is masked from ‘package:dplyr’:
+
+    compute
+
+> if (!require("pROC")) install.packages("pROC", repos="http://cran.us.r-project.org")
+Loading required package: pROC
+Type 'citation("pROC")' for a citation.
+
+Attaching package: ‘pROC’
+
+The following objects are masked _by_ ‘.GlobalEnv’:
+
+    auc, roc
+
+The following objects are masked from ‘package:stats’:
+
+    cov, smooth, var
+
+> 
+> library(jpeg)       # For reading JPEG images.
+> library(tidyverse)  # For data manipulation.
+> library(neuralnet)  # For the feed-forward neural network classifier.
+> library(pROC)       # For ROC analysis.
+> 
+> # -------------------------------
+> # Part 1: Data Preparation
+> # -------------------------------
+> # Read metadata file. This CSV should have columns: name (filename) and category.
+> pm <- read.csv("photoMetaData.csv")
+> n <- nrow(pm)
+> 
+> # Define binary response: for instance, 1 if outdoor image, 0 if indoor.
+> # Here we assume outdoor images are those with category "outdoor-day". Adjust as needed.
+> y <- as.numeric(pm$category == "outdoor-day")
+> 
+> # Function to partition an image into a 10x10 grid and compute median intensity.
+> # For color images, compute median per channel then average across channels.
+> extract_features <- function(image_path) {
++   img <- tryCatch(readJPEG(image_path), error = function(e) { 
++     message(sprintf("Error reading file: %s", image_path))
++     return(NULL)
++   })
++   if (is.null(img)) return(rep(NA, 100))
++   
++   # Get image dimensions.
++   dims <- dim(img)  # Expected: (height, width, 3)
++   if (length(dims) != 3) {
++     # If grayscale, replicate to 3 channels.
++     img <- array(rep(img, 3), dim = c(dims[1], dims[2], 3))
++     dims <- dim(img)
++   }
++   
++   grid_rows <- 10
++   grid_cols <- 10
++   height <- dims[1]
++   width  <- dims[2]
++   cell_height <- floor(height / grid_rows)
++   cell_width  <- floor(width / grid_cols)
++   features <- numeric(100)
++   
++   idx <- 1
++   for (i in 0:(grid_rows - 1)) {
++     for (j in 0:(grid_cols - 1)) {
++       row_start <- i * cell_height + 1
++       row_end   <- (i + 1) * cell_height
++       col_start <- j * cell_width + 1
++       col_end   <- (j + 1) * cell_width
++       cell <- img[row_start:row_end, col_start:col_end, ]
++       # Compute median for each channel and average.
++       medians <- apply(cell, 3, median)
++       features[idx] <- mean(medians)
++       idx <- idx + 1
++     }
++   }
++   return(features)
++ }
+> 
+> # Build feature matrix X for all images.
+> X <- matrix(NA, ncol = 100, nrow = n)
+> for (j in 1:n) {
++   img_path <- file.path("columbiaImages", pm$name[j])
++   feats <- extract_features(img_path)
++   X[j, ] <- feats
++   if(j %% 10 == 0) cat(sprintf("%03d / %03d images processed\n", j, n))
++ }
+010 / 800 images processed
+020 / 800 images processed
+030 / 800 images processed
+040 / 800 images processed
+050 / 800 images processed
+060 / 800 images processed
+070 / 800 images processed
+080 / 800 images processed
+090 / 800 images processed
+100 / 800 images processed
+110 / 800 images processed
+120 / 800 images processed
+130 / 800 images processed
+140 / 800 images processed
+150 / 800 images processed
+160 / 800 images processed
+170 / 800 images processed
+180 / 800 images processed
+190 / 800 images processed
+200 / 800 images processed
+210 / 800 images processed
+220 / 800 images processed
+230 / 800 images processed
+240 / 800 images processed
+250 / 800 images processed
+260 / 800 images processed
+270 / 800 images processed
+280 / 800 images processed
+290 / 800 images processed
+300 / 800 images processed
+310 / 800 images processed
+320 / 800 images processed
+330 / 800 images processed
+340 / 800 images processed
+350 / 800 images processed
+360 / 800 images processed
+370 / 800 images processed
+380 / 800 images processed
+390 / 800 images processed
+400 / 800 images processed
+410 / 800 images processed
+420 / 800 images processed
+430 / 800 images processed
+440 / 800 images processed
+450 / 800 images processed
+460 / 800 images processed
+470 / 800 images processed
+480 / 800 images processed
+490 / 800 images processed
+500 / 800 images processed
+510 / 800 images processed
+520 / 800 images processed
+530 / 800 images processed
+540 / 800 images processed
+550 / 800 images processed
+560 / 800 images processed
+570 / 800 images processed
+580 / 800 images processed
+590 / 800 images processed
+600 / 800 images processed
+610 / 800 images processed
+620 / 800 images processed
+630 / 800 images processed
+640 / 800 images processed
+650 / 800 images processed
+660 / 800 images processed
+670 / 800 images processed
+680 / 800 images processed
+690 / 800 images processed
+700 / 800 images processed
+710 / 800 images processed
+720 / 800 images processed
+730 / 800 images processed
+740 / 800 images processed
+750 / 800 images processed
+760 / 800 images processed
+770 / 800 images processed
+780 / 800 images processed
+790 / 800 images processed
+800 / 800 images processed
+> 
+> # Remove any images for which features could not be extracted.
+> valid_idx <- complete.cases(X)
+> X <- X[valid_idx, ]
+> y <- y[valid_idx]
+> pm <- pm[valid_idx, ]
+> 
+> # Normalize predictors.
+> X <- scale(X)
+> 
+> # Partition data: 70% training, 30% testing.
+> set.seed(123)
+> train_idx <- sample(1:nrow(X), size = floor(0.7 * nrow(X)))
+> X_train <- X[train_idx, ]
+> X_test  <- X[-train_idx, ]
+> y_train <- y[train_idx]
+> y_test  <- y[-train_idx]
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> 
+> # -------------------------------
+> # Part 2: Logistic Regression Classification (Baseline)
+> # -------------------------------
+> # -------------------------------
+> # Part 2: Logistic Regression Classification (Baseline)
+> # -------------------------------
+> # Combine predictors and response into a data frame for glm.
+> train_df <- as.data.frame(X_train)
+> colnames(train_df) <- paste0("X", 1:ncol(X_train))
+> train_df$y <- y_train
+> 
+> # Fit logistic regression.
+> logistic_model <- glm(y ~ ., data = train_df, family = binomial)
+> summary(logistic_model)
+
+Call:
+glm(formula = y ~ ., family = binomial, data = train_df)
+
+Coefficients:
+              Estimate Std. Error z value Pr(>|z|)    
+(Intercept) -1.0128928  0.1337306  -7.574 3.62e-14 ***
+X1           0.3091321  0.3603641   0.858  0.39098    
+X2          -0.1768602  0.4449147  -0.398  0.69099    
+X3           0.1405660  0.4002553   0.351  0.72545    
+X4           0.2927376  0.3978596   0.736  0.46186    
+X5          -0.5679774  0.3946262  -1.439  0.15007    
+X6           0.1573838  0.3472061   0.453  0.65034    
+X7           0.4924593  0.3863342   1.275  0.20242    
+X8          -0.3951532  0.4206706  -0.939  0.34756    
+X9          -0.4767799  0.4028197  -1.184  0.23657    
+X10          0.4724357  0.3336773   1.416  0.15682    
+X11          0.0594714  0.4306929   0.138  0.89017    
+X12          0.8638516  0.4670941   1.849  0.06440 .  
+X13         -0.6589826  0.4395563  -1.499  0.13382    
+X14          0.1590343  0.4371859   0.364  0.71603    
+X15          0.6043776  0.3906130   1.547  0.12180    
+X16         -0.1310922  0.4118170  -0.318  0.75024    
+X17          0.2276744  0.4226867   0.539  0.59014    
+X18          0.1272623  0.4746855   0.268  0.78862    
+X19         -0.1389008  0.4401566  -0.316  0.75233    
+X20         -0.1608312  0.4213472  -0.382  0.70268    
+X21         -0.5498326  0.3946018  -1.393  0.16350    
+X22         -0.0815704  0.3898211  -0.209  0.83425    
+X23          0.0130412  0.4024054   0.032  0.97415    
+X24         -0.3761543  0.4453632  -0.845  0.39833    
+X25          0.4403117  0.3658354   1.204  0.22875    
+X26         -0.0670886  0.3633020  -0.185  0.85349    
+X27         -0.5421527  0.4138685  -1.310  0.19021    
+X28          0.0634970  0.4194109   0.151  0.87966    
+X29          0.2810598  0.3797471   0.740  0.45923    
+X30          0.3696587  0.3917137   0.944  0.34532    
+X31          0.6936805  0.3695680   1.877  0.06052 .  
+X32         -0.6338376  0.4411078  -1.437  0.15074    
+X33         -0.0275583  0.3430468  -0.080  0.93597    
+X34         -0.2090154  0.3350112  -0.624  0.53269    
+X35          0.1116607  0.3225517   0.346  0.72921    
+X36          0.0732326  0.3453066   0.212  0.83204    
+X37         -0.6890262  0.3696414  -1.864  0.06232 .  
+X38          1.0965716  0.3959457   2.770  0.00561 ** 
+X39          0.0289557  0.3908567   0.074  0.94094    
+X40         -0.1036029  0.3440227  -0.301  0.76330    
+X41         -0.4394737  0.3813079  -1.153  0.24910    
+X42          0.7392452  0.4257224   1.736  0.08248 .  
+X43         -0.4290960  0.3549340  -1.209  0.22668    
+X44          0.5127903  0.3393014   1.511  0.13071    
+X45         -0.5657284  0.3351382  -1.688  0.09140 .  
+X46          0.4469281  0.3156290   1.416  0.15678    
+X47          0.3568196  0.3474270   1.027  0.30440    
+X48          0.0359635  0.3505443   0.103  0.91829    
+X49         -0.1442520  0.3354846  -0.430  0.66721    
+X50          0.1637307  0.3198096   0.512  0.60868    
+X51         -0.6924277  0.3947441  -1.754  0.07941 .  
+X52          0.1546233  0.3905250   0.396  0.69215    
+X53          0.6448158  0.3143867   2.051  0.04026 *  
+X54          0.1159354  0.3101058   0.374  0.70851    
+X55         -0.0795508  0.2855572  -0.279  0.78057    
+X56          0.0699878  0.2839865   0.246  0.80534    
+X57         -0.3298941  0.3217630  -1.025  0.30524    
+X58         -0.1839606  0.3385090  -0.543  0.58682    
+X59          0.0723512  0.3171453   0.228  0.81954    
+X60          0.0385355  0.3158763   0.122  0.90290    
+X61          0.5618340  0.3014394   1.864  0.06234 .  
+X62         -0.6111075  0.3313232  -1.844  0.06512 .  
+X63          0.8245545  0.3126920   2.637  0.00837 ** 
+X64         -0.4916362  0.3113957  -1.579  0.11438    
+X65          0.4549270  0.2596569   1.752  0.07977 .  
+X66         -0.2748010  0.2831182  -0.971  0.33174    
+X67          0.7411185  0.2884091   2.570  0.01018 *  
+X68         -0.3341844  0.3031964  -1.102  0.27037    
+X69          0.3702311  0.3259475   1.136  0.25601    
+X70         -0.2314770  0.3107036  -0.745  0.45627    
+X71         -0.0959516  0.3617645  -0.265  0.79083    
+X72          0.2943672  0.3695381   0.797  0.42569    
+X73         -0.7760193  0.3422866  -2.267  0.02338 *  
+X74         -0.5454962  0.3345717  -1.630  0.10301    
+X75          0.7644745  0.3133708   2.440  0.01471 *  
+X76         -0.5474418  0.2916463  -1.877  0.06051 .  
+X77          0.5100340  0.3020507   1.689  0.09130 .  
+X78          0.0009286  0.3075090   0.003  0.99759    
+X79         -0.6224866  0.3647933  -1.706  0.08793 .  
+X80          0.0207948  0.3230894   0.064  0.94868    
+X81         -0.8230067  0.3802894  -2.164  0.03045 *  
+X82          0.5067346  0.4030534   1.257  0.20867    
+X83         -0.3883577  0.3002477  -1.293  0.19585    
+X84          0.3740916  0.3536567   1.058  0.29015    
+X85         -0.1044520  0.3143008  -0.332  0.73964    
+X86          0.6064708  0.3323035   1.825  0.06799 .  
+X87         -0.7873314  0.3367402  -2.338  0.01938 *  
+X88          0.3592284  0.3471625   1.035  0.30078    
+X89          0.6346914  0.4031572   1.574  0.11542    
+X90         -0.1160972  0.3535722  -0.328  0.74264    
+X91          0.5965051  0.3157858   1.889  0.05890 .  
+X92         -0.3338137  0.3748045  -0.891  0.37313    
+X93          0.4448338  0.3643167   1.221  0.22208    
+X94         -0.0610807  0.3986431  -0.153  0.87822    
+X95         -0.1334528  0.3637828  -0.367  0.71373    
+X96          0.3071258  0.3696833   0.831  0.40610    
+X97          0.1915982  0.3527343   0.543  0.58701    
+X98         -0.4346032  0.3240065  -1.341  0.17981    
+X99          0.0833704  0.3706613   0.225  0.82204    
+X100        -0.2422891  0.3158700  -0.767  0.44305    
+---
+Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+
+(Dispersion parameter for binomial family taken to be 1)
+
+    Null deviance: 718.75  on 559  degrees of freedom
+Residual deviance: 468.05  on 459  degrees of freedom
+AIC: 670.05
+
+Number of Fisher Scoring iterations: 5
+
+> 
+> # Predict probabilities on test set.
+> test_df <- as.data.frame(X_test)
+> colnames(test_df) <- paste0("X", 1:ncol(X_test))
+> pred_prob_logistic <- predict(logistic_model, test_df, type = "response")
+> pred_class_logistic <- ifelse(pred_prob_logistic > 0.5, 1, 0)
+> 
+> # Compute confusion matrix and accuracy.
+> conf_matrix_logistic <- table(Predicted = pred_class_logistic, Actual = y_test)
+> logistic_accuracy <- mean(pred_class_logistic == y_test) * 100
+> 
+> cat(sprintf("Logistic Regression Accuracy: %.2f%%\n", logistic_accuracy))
+Logistic Regression Accuracy: 73.75%
+> 
+> # Calculate sensitivity and specificity.
+> TP <- conf_matrix_logistic["1", "1"]
+> TN <- conf_matrix_logistic["0", "0"]
+> FP <- conf_matrix_logistic["1", "0"]
+> FN <- conf_matrix_logistic["0", "1"]
+> sensitivity_logistic <- TP / (TP + FN) * 100
+> specificity_logistic <- TN / (TN + FP) * 100
+> cat(sprintf("Sensitivity: %.2f%%, Specificity: %.2f%%\n", sensitivity_logistic, specificity_logistic))
+Sensitivity: 59.30%, Specificity: 81.82%
+> 
+> #roc_logistic <- roc(y_test, pred_prob_logistic)
+> #auc_logistic <- auc(roc_logistic)
+> #cat(sprintf("Logistic Regression AUC: %.2f%\n", auc_logistic *10))
+> library(pROC)
+> 
+> # For Logistic Regression:
+> # Create the ROC object.
+> roc_logistic <- pROC::roc(response = y_test, predictor = pred_prob_logistic)
+Setting levels: control = 0, case = 1
+Setting direction: controls < cases
+> auc_logistic <- pROC::auc(roc_logistic)
+> cat(sprintf("Logistic Regression AUC: %.2f%%\n", auc_logistic *100))
+Logistic Regression AUC: 72.10%
+> 
+> # Plot using the specialized plot.roc() function.
+> plot.roc(roc_logistic, col = "blue", main = "ROC: Logistic Regression")
+> 
+> # -------------------------------
+> # Part3: Neural Networks
+> # -------------------------------
+> 
+> 
+> 
+> #
+> # Ensure that predictors are in a data frame and y is appended as a column.
+> # -------------------------------
+> train_df <- as.data.frame(X_train)
+> colnames(train_df) <- paste0("X", 1:ncol(X_train))
+> train_df$y <- as.numeric(y_train)
+> 
+> test_df <- as.data.frame(X_test)
+> colnames(test_df) <- paste0("X", 1:ncol(X_test))
+> test_df$y <- as.numeric(y_test)
+> 
+> # -------------------------------
+> # Build and Train the Neural Network using the neuralnet package.
+> # In this example, we use two hidden layers with 128 and 64 neurons.
+> # -------------------------------
+> nn_formula <- as.formula(paste("y ~", paste(colnames(train_df)[1:ncol(X_train)], collapse = " + ")))
+> 
+> set.seed(123)
+> nn_model <- neuralnet(nn_formula,
++                       data = train_df,
++                       hidden = c(64, 32), #64, 32 max for now
++                       linear.output = FALSE, # for classification
++                       stepmax = 1e6,
++                       lifesign = "minimal")
+hidden: 64, 32    thresh: 0.01    rep: 1/1    steps:      63	error: 0.02207	time: 1.09 secs
+> 
+> # Plot the neural network (optional)
+> plot(nn_model)
+> 
+> # -------------------------------
+> # Evaluate the Neural Network on the Test Set
+> # -------------------------------
+> nn_predictions <- neuralnet::compute(nn_model, test_df[, colnames(test_df) != "y"])
+> predicted_probabilities <- nn_predictions$net.result  # Predicted probabilities
+> predicted_classes <- ifelse(predicted_probabilities > 0.5, 1, 0)
+> 
+> # Create a confusion matrix
+> conf_matrix <- table(Predicted = predicted_classes, Actual = test_df$y)
+> print("Neural Network Confusion Matrix:")
+[1] "Neural Network Confusion Matrix:"
+> print(conf_matrix)
+         Actual
+Predicted   0   1
+        0 125  36
+        1  29  50
+> 
+> # Calculate sensitivity and specificity:
+> # Sensitivity = TP / (TP + FN)
+> # Specificity = TN / (TN + FP)
+> TP <- conf_matrix["1","1"]
+> TN <- conf_matrix["0","0"]
+> FP <- conf_matrix["1","0"]
+> FN <- conf_matrix["0","1"]
+> sensitivity <- TP / (TP + FN)
+> specificity <- TN / (TN + FP)
+> cat(sprintf("Sensitivity: %.2f%%\n", sensitivity * 100))
+Sensitivity: 58.14%
+> cat(sprintf("Specificity: %.2f%%\n", specificity * 100))
+Specificity: 81.17%
+> 
+> # Calculate overall accuracy.
+> accuracy <- mean(predicted_classes == test_df$y)
+> cat(sprintf("Neural Network Test Accuracy: %.2f%%\n", accuracy * 100))
+Neural Network Test Accuracy: 72.92%
+> 
+> # -------------------------------
+> # ROC Curve Calculation using the pROC package
+> # -------------------------------
+> #roc_obj <- roc(test_df$y, as.vector(predicted_probabilities))
+> #auc_value <- auc(roc_obj)
+> #cat(sprintf("Neural Network AUC: %.2f%%\n", auc_value * 100))
+> 
+> # Plot ROC curve.
+> roc_nn <- pROC::roc(response = y_test, predictor = as.vector(predicted_probabilities))
+Setting levels: control = 0, case = 1
+Setting direction: controls < cases
+> 
+> auc_value <- auc(roc_obj)
+> cat(sprintf("Neural Network AUC: %.2f%%\n", auc_value * 100))
+Neural Network AUC: 78.26%
+> plot.roc(roc_nn, col = "red", main = "ROC: Neural Network")
+> 
+> 
+> # Save the results to a file.
+> save(final_results, file = "final_results.Data")
+> print("Final results saved to final_results.RData")
+[1] "Final results saved to final_results.RData"
